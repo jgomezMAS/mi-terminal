@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"Permisos de ventana para Mi Terminal","local":true,"windows":["main"],"permissions":["core:default","dialog:allow-open","dialog:allow-save","clipboard-manager:allow-read-text","clipboard-manager:allow-write-text"]}}

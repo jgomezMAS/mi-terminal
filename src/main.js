@@ -90,7 +90,7 @@ function writeJson(file, data) {
   fs.renameSync(tmp, file);
 }
 
-// Las contraseñas se cifran con el almacén del sistema (DPAPI en Windows).
+// Las contraseñas se cifran con el almacén seguro disponible en el sistema.
 function encrypt(text) {
   if (!text) return null;
   if (!safeStorage.isEncryptionAvailable()) {
@@ -648,14 +648,16 @@ handle('sftp:rename', async (_e, id, from, to) => {
 const editBase = path.join(os.tmpdir(), 'mi-terminal-edit');
 const settingsFile = () => path.join(dataDir(), 'settings.json');
 const VSCODE_PATHS = [
-  path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Microsoft VS Code', 'Code.exe'),
-  path.join(process.env.ProgramFiles || '', 'Microsoft VS Code', 'Code.exe'),
+  ...(process.platform === 'win32' ? [
+    path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Microsoft VS Code', 'Code.exe'),
+    path.join(process.env.ProgramFiles || '', 'Microsoft VS Code', 'Code.exe'),
+  ] : ['/usr/bin/code', '/usr/local/bin/code', path.join(os.homedir(), '.local/bin/code')]),
 ];
 
 // Un nombre del servidor puede traer caracteres que Windows no acepta (o "\", que crearía subcarpetas).
 const safeName = (n) => n.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/[. ]+$/, '_') || 'archivo';
 
-// Editor: el elegido por el usuario, si no VS Code si está instalado, si no el predeterminado de Windows.
+// Editor: el elegido por el usuario, si no VS Code y, en último caso, el predeterminado del sistema.
 function getEditor() {
   const st = readJson(settingsFile(), {});
   if (st.editor === 'system') return null;
@@ -663,15 +665,15 @@ function getEditor() {
   return VSCODE_PATHS.find((p) => p && fs.existsSync(p)) || null;
 }
 
-const editorName = (p) => (p ? path.basename(p, path.extname(p)) : 'Predeterminado de Windows');
+const editorName = (p) => (p ? path.basename(p, path.extname(p)) : `Predeterminado de ${process.platform === 'win32' ? 'Windows' : 'Linux'}`);
 
 handle('editor:get', () => editorName(getEditor()));
 
 handle('editor:choose', async () => {
   const r = await dialog.showOpenDialog(win, {
     title: 'Elegir editor',
-    defaultPath: process.env.ProgramFiles,
-    filters: [{ name: 'Programas', extensions: ['exe'] }],
+    defaultPath: process.platform === 'win32' ? process.env.ProgramFiles : '/usr/bin',
+    ...(process.platform === 'win32' ? { filters: [{ name: 'Programas', extensions: ['exe'] }] } : {}),
     properties: ['openFile'],
   });
   if (r.canceled) return editorName(getEditor());
@@ -720,17 +722,17 @@ handle('sftp:edit', async (_e, id, remotePath) => {
   if (editor) {
     spawn(editor, [local], { detached: true, stdio: 'ignore' }).unref();
   } else {
-    // Con el programa predeterminado de Windows, un archivo .bat, .exe, .js, etc. se ejecutaría.
+    // Evita abrir contenido ejecutable con el manejador predeterminado del escritorio.
     // Un servidor comprometido podría aprovecharlo, así que esos tipos nunca se abren así.
     if (isRunnable(name)) {
       stopEdit(c, remotePath);
       throw new Error(
-        `"${name}" es de un tipo que Windows ejecutaría en vez de abrir. Por seguridad no se abre: ` +
+        `"${name}" es de un tipo ejecutable y no se abre con el programa predeterminado: ` +
           'elige un editor (botón Editor) o usa "Descargar".'
       );
     }
     const err = await shell.openPath(local);
-    if (err) throw new Error(`Windows no sabe con qué abrir "${name}". Elige un editor en el panel SFTP.`);
+    if (err) throw new Error(`El sistema no sabe con qué abrir "${name}". Elige un editor en el panel SFTP.`);
   }
   return editorName(editor);
 });

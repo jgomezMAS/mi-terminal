@@ -2,10 +2,8 @@
 <html lang="es">
 <head>
   <meta charset="utf-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'">
   <title>Mi Terminal</title>
-  <link rel="stylesheet" href="../../node_modules/@xterm/xterm/css/xterm.css">
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
   <aside id="sidebar">
@@ -24,12 +22,12 @@
   <main>
     <div id="tabbar">
       <div id="tabs"></div>
-      <button id="btn-local" title="Abrir una consola de este equipo: PowerShell, CMD, WSL…">+ Consola</button>
+      <button id="btn-local" title="Abrir una consola Bash, Zsh o Fish en este equipo">+ Consola</button>
       <button id="btn-sftp" title="Mostrar u ocultar el explorador de archivos">SFTP</button>
     </div>
     <div id="workspace">
       <div id="terminals">
-        <div id="empty">Doble clic en una sesión para conectar.<br><small>Clic derecho sobre una sesión para editarla.<br>«+ Consola» abre PowerShell, CMD o WSL en este equipo.</small></div>
+        <div id="empty">Doble clic en una sesión para conectar.<br><small>Clic derecho sobre una sesión para editarla.<br>«+ Consola» abre Bash, Zsh o Fish en este equipo.</small></div>
       </div>
       <div class="splitter" id="split-right" hidden title="Arrastra para cambiar el ancho. Doble clic: tamaño original."></div>
       <section id="sftp" hidden>
@@ -43,7 +41,7 @@
           <button id="sftp-mkdir">Nueva carpeta</button>
         </div>
         <div class="sftp-actions sftp-opts">
-          <label title="Abre SFTP como administrador (sudo), igual que la opción de WinSCP. Permite subir y editar en carpetas de root o www-data."><input type="checkbox" id="sftp-sudo"> sudo</label>
+          <label title="SFTP con sudo aún no está disponible en esta versión de Tauri."><input type="checkbox" id="sftp-sudo" disabled> sudo</label>
           <button id="sftp-editor" title="Programa con el que se abren los archivos">Editor: …</button>
         </div>
         <ul id="sftp-list"></ul>
@@ -112,19 +110,28 @@
     </form>
   </dialog>
 
+  <dialog id="agent-approval-dialog" aria-labelledby="agent-approval-title">
+    <h2 id="agent-approval-title">Solicitud de un agente</h2>
+    <pre id="agent-approval-detail" class="hint"></pre>
+    <div class="buttons">
+      <button type="button" id="agent-approval-deny">Rechazar</button>
+      <button type="button" id="agent-approval-allow" class="primary">Permitir</button>
+      <button type="button" id="agent-approval-all" hidden>Permitir todo en esta pestaña</button>
+    </div>
+  </dialog>
+
   <dialog id="mcp-dialog">
     <form id="mcp-form">
       <h2>Agentes de IA (MCP)</h2>
-      <p class="hint">Permite que un agente (Claude, Cursor, Codex…) use Mi Terminal. Solo ve las sesiones que marques con «Permitir agentes» al editarlas, y cada acción te pide aprobación.</p>
+      <p class="hint">Permite que un agente (Claude, Cursor, Codex…) consulte y use las pestañas que habilites. Ejecutar comandos, enviar teclas y usar SFTP requiere aprobación en Mi Terminal.</p>
       <label class="check"><input type="checkbox" id="mcp-enabled"> Activar acceso de agentes</label>
-      <label class="check"><input type="checkbox" id="mcp-local"> Permitir también consolas locales (PowerShell, CMD, WSL)</label>
-      <label>Dónde apruebas lo que pide el agente
+      <label class="check"><input type="checkbox" id="mcp-local"> Permitir también consolas locales (Bash, Zsh, Fish)</label>
+      <label>Aprobación de acciones
         <select id="mcp-approval">
-          <option value="agent">En el agente (Codex, Claude, Cursor…)</option>
-          <option value="app">En Mi Terminal (más seguro)</option>
+          <option value="app">En Mi Terminal</option>
         </select>
       </label>
-      <p class="hint">«En el agente»: la pregunta aparece donde estás trabajando. Si ese agente no sabe mostrarla, se usa el aviso de Mi Terminal. «En Mi Terminal»: nada se ejecuta sin tu clic en esta app, aunque alguien obtenga el token.</p>
+      <p class="hint">Las solicitudes muestran el texto exacto. Puedes permitir una acción o dar permiso completo a una pestaña hasta que se cierre.</p>
       <p id="mcp-status" class="hint"></p>
       <fieldset id="mcp-setup">
         <legend>Conectar un agente</legend>
@@ -146,9 +153,6 @@
 
   <div id="ctx-menu" hidden></div>
 
-  <script src="../../node_modules/@xterm/xterm/lib/xterm.js"></script>
-  <script src="../../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
-  <script src="../../node_modules/@xterm/addon-webgl/lib/addon-webgl.js"></script>
-  <script src="renderer.js"></script>
+  <script type="module" src="./renderer.js"></script>
 </body>
 </html>

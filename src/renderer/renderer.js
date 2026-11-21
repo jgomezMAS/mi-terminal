@@ -1,4 +1,10 @@
 // Interfaz: gestor de sesiones, pestañas de terminal y explorador SFTP.
+import { Terminal } from '@xterm/xterm';
+import { FitAddon } from '@xterm/addon-fit';
+import { WebglAddon } from '@xterm/addon-webgl';
+import '@xterm/xterm/css/xterm.css';
+import { api } from './tauri-api.js';
+
 const $ = (sel) => document.querySelector(sel);
 
 let sessions = [];
@@ -235,7 +241,7 @@ function askNow(title, label, { secret = true, value = '' } = {}) {
 
 const openSession = (s) => openTab(s.name, { session: s });
 
-// Consola de este equipo (CMD, PowerShell, WSL…) en una pestaña.
+// Consola de este equipo (Bash, Zsh o Fish) en una pestaña.
 const openLocal = (shell) => openTab(shell.name, { local: shell, noStats: true });
 
 $('#btn-local').onclick = async (e) => {
@@ -262,7 +268,7 @@ function openTab(name, extra) {
     scrollback: 10000,
     theme: { background: '#1e1e1e' },
   });
-  const fit = new FitAddon.FitAddon();
+  const fit = new FitAddon();
   term.loadAddon(fit);
   term.open(el);
   enableWebgl(term);
@@ -349,7 +355,7 @@ function openTab(name, extra) {
 // Dibuja con la tarjeta gráfica (mucho más rápido). Si WebGL falla, xterm vuelve al modo normal.
 function enableWebgl(term) {
   try {
-    const webgl = new WebglAddon.WebglAddon();
+    const webgl = new WebglAddon();
     webgl.onContextLoss(() => webgl.dispose());
     term.loadAddon(webgl);
   } catch {
@@ -406,6 +412,13 @@ async function connectTab(tab, secret, retried = false) {
     }
   } catch (err) {
     const msg = cleanErr(err);
+    if (msg.startsWith('HOST_KEY_UNTRUSTED|')) {
+      const [, hostId, fingerprint] = msg.split('|');
+      const accepted = confirm(`Primera conexión con ${hostId}.\n\nHuella SHA-256:\n${fingerprint}\n\n¿Confías en este servidor?`);
+      if (!accepted) return markClosed(tab, 'Conexión cancelada: servidor no confiable.');
+      await api.trustHost(hostId, fingerprint);
+      return connectTab(tab, secret, retried);
+    }
     const isKey = s.authType === 'key';
     const canRetry = isKey ? /passphrase/i.test(msg) : s.authType === 'password' && /authentication methods failed/i.test(msg);
     if (!retried && canRetry) {
@@ -735,7 +748,7 @@ function sftpFail(prefix, err) {
   const t = activeSftpTab();
   const hint =
     /permission denied/i.test(msg) && t && !t.session.sftpSudo
-      ? ' — tu usuario no tiene permiso en esa carpeta. Activa "sudo" aquí abajo o revisa los permisos en el servidor.'
+      ? ' — SFTP con sudo aún no está disponible en esta versión de Tauri.'
       : '';
   sftpMsg(`${prefix}: ${msg}${hint}`);
 }
@@ -812,9 +825,9 @@ $('#sftp-path').onkeydown = (e) => {
 };
 
 function syncSudo(t) {
-  const on = !!t?.session.sftpSudo;
+  const on = false;
   $('#sftp-sudo').checked = on;
-  $('#sftp-sudo').disabled = !t;
+  $('#sftp-sudo').disabled = true;
   $('#sftp-sudo').parentElement.classList.toggle('on', on);
 }
 
@@ -847,7 +860,7 @@ $('#sftp-editor').onclick = (e) => {
   const r = e.currentTarget.getBoundingClientRect();
   showMenu(r.left, r.bottom + 2, [
     ['Elegir programa…', async () => refreshEditorLabel(await api.editor.choose())],
-    ['Usar el predeterminado de Windows', async () => refreshEditorLabel(await api.editor.useSystem())],
+    ['Usar el predeterminado del sistema', async () => refreshEditorLabel(await api.editor.useSystem())],
   ]);
 };
 refreshEditorLabel();
@@ -879,19 +892,29 @@ $('#sftp-mkdir').onclick = async () => {
   }
 };
 
-// Arrastrar archivos desde Windows al panel para subirlos.
+// Tauri entrega rutas nativas en el evento de arrastre (DataTransfer no las expone en WebKitGTK).
 const dropZone = $('#sftp-list');
-dropZone.ondragover = (e) => {
-  e.preventDefault();
-  dropZone.classList.add('drop');
+const isOverDropZone = (position) => {
+  const factor = window.devicePixelRatio || 1;
+  const rect = dropZone.getBoundingClientRect();
+  const x = position.x / factor;
+  const y = position.y / factor;
+  return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
 };
-dropZone.ondragleave = () => dropZone.classList.remove('drop');
-dropZone.ondrop = async (e) => {
-  e.preventDefault();
+api.onFileDrop(async ({ payload }) => {
+  if (payload.type === 'leave') {
+    dropZone.classList.remove('drop');
+    return;
+  }
+  if (payload.type === 'enter' || payload.type === 'over') {
+    dropZone.classList.toggle('drop', isOverDropZone(payload.position));
+    return;
+  }
   dropZone.classList.remove('drop');
+  if (!isOverDropZone(payload.position)) return;
   const t = activeSftpTab();
   if (!t) return;
-  const files = [...e.dataTransfer.files];
+  const files = payload.paths;
   if (!files.length) return;
   try {
     const n = await api.sftp.uploadDropped(t.connId, t.sftpPath, files);
@@ -900,7 +923,7 @@ dropZone.ondrop = async (e) => {
   } catch (err) {
     sftpFail('Error al subir', err);
   }
-};
+});
 
 api.onProgress((_id, name, done, total) => {
   sftpMsg(`${name}: ${total ? Math.round((done / total) * 100) : 0}%`);
@@ -971,77 +994,52 @@ makeResizable($('#split-right'), $('#sftp'), { key: 'width.sftp', side: 'right',
 document.addEventListener('dragover', (e) => e.preventDefault());
 document.addEventListener('drop', (e) => e.preventDefault());
 
-// ---------- Agentes de IA (MCP) ----------
-// El proceso principal decide y aprueba; aquí solo se abren pestañas y se lee su texto.
+// ---------- Aprobaciones de agentes MCP ----------
+const agentApproval = $('#agent-approval-dialog');
+let activeAgentApproval = null;
 
-function tabText(tab, from, maxLines) {
-  const b = tab.term.buffer.active;
-  const out = [];
-  for (let i = Math.max(0, from); i < b.length; i++) {
-    const line = b.getLine(i);
-    if (!line) continue;
-    const text = line.translateToString(true);
-    if (line.isWrapped && out.length) out[out.length - 1] += text;
-    else out.push(text);
-  }
-  while (out.length && !out[out.length - 1].trim()) out.pop();
-  return out.slice(-maxLines).join('\n');
+function answerAgentApproval(decision) {
+  const requestId = activeAgentApproval;
+  if (!requestId) return;
+  activeAgentApproval = null;
+  agentApproval.close();
+  api.agent.respond(requestId, decision).catch((err) => status(cleanErr(err)));
 }
 
-// Espera a que xterm termine de procesar lo recibido antes de mirar el contenido.
-const settled = (tab) => new Promise((res) => tab.term.write('', res));
-
-function agentTab(connId) {
-  const tab = tabs.get(connId);
-  if (!tab) throw new Error('La pestaña ya no existe.');
-  return tab;
-}
-
-const agentOps = {
-  async open({ sessionId, shell }) {
+api.agent.onApproval((requestId, title, detail, tab) => {
+  activeAgentApproval = requestId;
+  $('#agent-approval-title').textContent = title;
+  $('#agent-approval-detail').textContent = detail;
+  $('#agent-approval-all').hidden = !tab;
+  agentApproval.showModal();
+});
+api.agent.onOpenRequest(async (requestId, sessionId, shellId) => {
+  let result;
+  try {
     let tab;
-    if (shell) {
+    if (shellId) {
+      const shell = (await api.local.shells()).find((item) => item.id === shellId);
+      if (!shell) throw new Error('Consola no disponible.');
       tab = openLocal(shell);
     } else {
       await refreshSessions();
-      const s = sessions.find((x) => x.id === sessionId);
-      if (!s) return { ok: false, error: 'Sesión no encontrada.' };
-      tab = openSession(s);
+      const session = sessions.find((item) => item.id === sessionId);
+      if (!session) throw new Error('Sesión no disponible.');
+      tab = openSession(session);
     }
     await tab.ready;
-    return tab.alive ? { ok: true, connId: tab.connId } : { ok: false, error: tab.lastError || 'No se pudo conectar.' };
-  },
-  // Marca la línea actual: la salida de un comando es lo que aparece desde ahí.
-  async mark({ connId }) {
-    const tab = agentTab(connId);
-    await settled(tab);
-    const id = ++counter;
-    (tab.marks ||= new Map()).set(id, tab.term.registerMarker(0));
-    return { mark: id };
-  },
-  unmark({ connId, mark }) {
-    const tab = tabs.get(connId);
-    tab?.marks?.get(mark)?.dispose();
-    tab?.marks?.delete(mark);
-    return { ok: true };
-  },
-  async read({ connId, mark, lines }) {
-    const tab = agentTab(connId);
-    await settled(tab);
-    const m = tab.marks?.get(mark);
-    const from = m && !m.isDisposed && m.line >= 0 ? m.line : 0;
-    return { text: tabText(tab, from, lines || 2000) };
-  },
-};
-
-api.agent.onRequest(async (reqId, op, payload) => {
-  let res;
-  try {
-    res = await agentOps[op](payload || {});
+    result = tab.alive ? { connId: tab.connId } : { error: tab.lastError || 'No se pudo abrir la pestaña.' };
   } catch (err) {
-    res = { error: cleanErr(err) };
+    result = { error: cleanErr(err) };
   }
-  api.agent.respond(reqId, res);
+  api.agent.respondOpen(requestId, result).catch((err) => status(cleanErr(err)));
+});
+$('#agent-approval-deny').onclick = () => answerAgentApproval('deny');
+$('#agent-approval-allow').onclick = () => answerAgentApproval('allow');
+$('#agent-approval-all').onclick = () => answerAgentApproval('all');
+agentApproval.addEventListener('cancel', (event) => {
+  event.preventDefault();
+  answerAgentApproval('deny');
 });
 
 api.agent.onPerm((id, all) => {
@@ -1057,7 +1055,7 @@ function showMcp(st) {
   $('#mcp-local').checked = st.allowLocal;
   $('#mcp-local').disabled = !st.enabled;
   $('#mcp-approval').value = st.approval;
-  $('#mcp-approval').disabled = !st.enabled;
+  $('#mcp-approval').disabled = true;
   $('#mcp-setup').disabled = !st.running;
   $('#mcp-status').textContent = st.error
     ? `No se pudo activar: ${st.error}`

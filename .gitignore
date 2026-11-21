@@ -1,6 +1,7 @@
 # Dependencias e instaladores generados
 node_modules/
 dist/
+src-tauri/target/
 
 # Claves y certificados: nunca al repositorio
 *.ppk
